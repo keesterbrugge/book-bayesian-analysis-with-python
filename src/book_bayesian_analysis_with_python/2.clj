@@ -31,32 +31,16 @@
             [our-first-model (py. pm Model)]
             (let [theta (py. pm Beta "theta" :alpha 1 :beta 1)
                   y (py. pm Bernoulli "y" :p theta :observed data)
-                  trace (py. pm sample 1000 :random_seed 123)])
-            our-first-model))
+                  trace (py. pm sample 1000 :random_seed 123)]
+              trace)))
 
 
 (require-python '([arviz :as az]))
-(az/summary trace)  ;; TODO fails :(
-;; does az fail, model trace fail, or just storing in symbol trace? try to
-;; get data out in other way
+(az/summary trace)
 
-(py/with [m (py. pm Model)] (py. pm Bernoulli "y2"  0.2) (pm/sample))
-
-(az/summary
- (py/with
-  [m (py. pm Model)]
-  (py. pm Bernoulli "y2"  0.2)
-  (pm/sample)))                  ;; NOTE it works 
-
-(with-show (az/plot_trace
-            (py/with
-             [m (py. pm Model)]
-             (py. pm Bernoulli "y2"  0.2)
-             (pm/sample))))                  ;; NOTE it also works :D:D
+(with-show (az/plot_trace trace))
 
 
-
-(py/run-simple-string "print('hey')")
 
 
 
