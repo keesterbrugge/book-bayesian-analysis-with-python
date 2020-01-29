@@ -3,13 +3,16 @@
             [libpython-clj.python :as py :refer [py. py.- py..]]
             [book-bayesian-analysis-with-python.utils :refer [with-show]]
             [oz.core :as oz]
-            [tech.ml.dataset :as ds]))
+            [tech.ml.dataset :as ds]
+            [tech.ml.dataset.pipeline :as ds-pipe]
+                     ))
 
 (require-python '[builtins :as pyb]
                 '[pymc3 :as pm :bind-ns]
                 '[numpy :as np]
                 '[arviz :as az]
-                '[scipy.stats :as stats :refer [bernoulli]])
+                '[scipy.stats :as stats :refer [bernoulli]]
+                'operator)
 
 
 (pyb/help pm)
@@ -167,6 +170,12 @@
                        :row {:field :day :type :nominal}}}]
   (oz/view! spec))
 
+
+
+
+
+
+
 (require-python 'pandas)
 
 (def tips-pd (pandas/read_csv "./resources/data/tips.csv"))
@@ -192,131 +201,132 @@
 (with-show(az/plot_trace (:trace inference-cg)))
 
 
+
+
+
+
+
 ;; and now without pandas
 
-(def tips (ds/->dataset "./resources/data/tips.csv"))
-(def tip (ds/column tips "tip"))
+(def tips-raw (ds/->dataset "./resources/data/tips.csv"))
 
-;; (require '[tech.ml.dataset.categorical])
-(require '[tech.ml.dataset.pipeline :as ds-pipe])
-
-(def tips-numberfied (ds-pipe/string->number tips "day"))
-
-(ds/unique-by "day" tips-numberfied)
-(tech.ml.dataset.column/unique (tips "day"))
-(tech.ml.dataset.categorical/build-categorical-map tips (list "day"))
-
-(def idx (tech.ml.dataset.categorical/column-categorical-map
-          (tech.ml.dataset.categorical/build-categorical-map tips (list "day"))
-          :int32
-          (ds/column tips "day")))    ;; TODO this has got to have easier method
-
-;; (defn col-dtype->int [ds column-name]
-;;   (tech.ml.dataset.categorical/column-categorical-map
-;;    (tech.ml.dataset.categorical/build-categorical-map ds (list column-name))
-;;    :int32
-;;    (tech.ml.dataset/column ds column-name)))
-
-;; (col-dtype->int tips "day")
-
-(def tips-int(-> (tech.ml.dataset.pipeline/string->number tips)
-                 (tech.ml.dataset.pipeline/->datatype  tech.ml.dataset.pipeline.column-filters/categorical? :int32)))
+(def tips-ds
+  (-> tips-raw
+      (ds-pipe/string->number "day" )
+      (ds-pipe/->datatype "day" :int32)))
 
 
-(def idx2 (tech.ml.dataset.categorical/column-categorical-map
-          (tech.ml.dataset.categorical/build-categorical-map tips (list "day"))
-          :int32
-          (ds/column tips "day")))    ;; TODO this has got to have easier method
-
-(tech.ml.dataset.categorical/column-values->categorical tips
-                                                        "day"
-                                                        (tech.ml.dataset.categorical/build-categorical-map tips (list "day"))
-
-                                                        )
-(tech.ml.dataset.pipeline/string->number tips)
-(tech.ml.dataset.pipeline/->datatype (tech.ml.dataset.pipeline/string->number tips) (tech.ml.dataset.pipeline.column-filters/select-columns ["day"] tips) :int32)
-
-(tech.ml.dataset.pipeline/->datatype 
- tips
- ;; (tech.ml.dataset.pipeline.column-filtrs/select-columns ["day"] tips)
-
-
- (tech.ml.dataset.pipeline.column-filters/select-column-names (list "day") tips)
- :int32)
-
-(ds/select-columns tips nil)
-
- ;; (tech.ml.dataset.pipeline/string->number tips) (tech.ml.dataset.pipeline.column-filters/select-columns ["day"] tips) :int32)
-
-
-(require 'tech.libs.tablesaw.tablesaw-column)
-(tech.libs.tablesaw.tablesaw-column/datatype->column-data-cast-fn :int32 (tips-int "day"))
-
-(tech.ml.dataset.column/new-column "blah" :int32 (tips-int "day"))
-
-(require '[tech.v2.datatype :as dtype])
-
-(ds/update-column tips-int "day" #(dtype/->reader % :float64))
-
-(dtype/->float-array (tips-int "day"))
-
-(def tips-numbered (tech.ml.dataset.pipeline/string->number tips))
-
-(dtype/->int-array (tips-numbered "day"))
-
-(take 20 (tips "day"))
-
-(string)
-
-;;;;; here
-
-;; Add, Remove, Update
-
-;; Adding or updating columns requires either a fully constructed column (dtype/make-container :tablesaw-column :float32 elem-seq) or a reader that has a type compatible with tablesaw's column system. For this reason you may be errors if you pass a persistent vector in to the add-or-update method without first given it a datatype via (dtype/->reader [1 2 3 4] :float32).
-
-;; user> (require '[tech.v2.datatype.functional :as dfn])
-;; nil
-;; ;;Log doesn't work if the incoming value isn't a float32 or a float64.  SalePrice is
-;; ;;of datatype :int32 so we convert it before going into log.
-;; user> (ds/update-column small-ames "SalePrice" #(-> (dtype/->reader % :float64)
-;;                                                     dfn/log))
-;; [5 2]:
+(def inference-cg2
+  (let [n-groups (count (set (tips-ds "day")))
+        tip (tips-ds "tip")
+        idx (tips-ds "day")]
+    (py/with
+     [model (py. pm Model)]
+     (let [mu    (pm/Normal "mu"
+                            :mu 0
+                            :sd 10
+                            :shape n-groups)
+           sigma (pm/HalfNormal "sigma"
+                                :sd 10
+                                :shape n-groups)
+           y     (pm/Normal "y"
+                            :mu (py/get-item mu idx)
+                            :sd (py/get-item sigma idx)
+                            :observed tip)
+           diffs (doseq [i (range n-groups)
+                         j (range n-groups)
+                         :when (< i j)]
+                   (pm/Deterministic
+                    (str "mu" i " - mu" j)
+                    (operator/sub (py/get-item mu i)
+                                  (py/get-item mu j))))
+           trace (pm/sample 1000 :random_seed 123)]
+       {:trace  trace
+        :model model}))))
 
 
-;; '' tile here 
+(with-show
+  (az/plot_forest (:trace inference-cg2)))
 
-(def )
-(def n-groups (count (set idx)))
 
-(def tip (ds/column tips "tip"))
+(def n-samples (repeat 3 30))
+(def g-samples (repeat 3 18))
 
-(set idx)
+(def group-idx (repeat  (count n-samples)))
 
-(def idx-ds
-  (->(tech.ml.dataset.pipeline/string->number tips)
-     (ds/column "day")
-     (dtype/->reader :int32)
-     ))
 
-(def inference-cg2 (py/with
-                   [model (py. pm Model)]
-                   (let [mu (py. pm Normal "mu" :mu 0 :sd 10 :shape n-groups)
-                         sigma (py. pm HalfNormal "sigma" :sd 10 :shape n-groups )
-                         y (py. pm Normal "y"
-                                :mu (py/get-item mu idx-ds)
-                                :sd (py/get-item sigma idx-ds)
-                                :observed (tips "tip"))
-                         trace (py. pm sample 1000 :random_seed 123)]
-                     {:trace  trace
-                      :model model})))
+(defn sim-data-h
+  [n-samples g-samples]
+  (vec (mapcat (fn [g n] (concat (repeat g 1) (repeat (- n g) 0))) g-samples n-samples)))
+(sim-data-h n-samples g-samples)
 
-(with-show(az/plot_trace (:trace inference-cg2)))
+(defn build-group-idx-h [n-samples]
+  (vec (mapcat (fn [i el] (repeat el i)) (range (count n-samples)) n-samples)))
 
-(py/dir(:trace inference-cg2))
-(pyb/help(:trace inference-cg2))
+#_(def inference-h
+  (let [{:keys [group-idx data]} (sim-data-h n-samples g-samples)
+        n-groups (count (set group-idx))]
+    (py/with
+     [model (pm/Model)]
+     (let [mu    (pm/Beta "mu" 1.0 1.0)
+           kappa (pm/HalfNormal "kappa" 10)
+           theta (pm/Beta "theta"
+                          :alpha (operator/mul mu kappa)
+                          :beta (operator/mul kappa (operator/sub 1.0 mu))
+                          :shape n-groups)
+           y     (pm/Bernoulli "y"
+                               :p (py/get-item theta group-idx)
+                               :observed data)
+           trace (pm/sample 2000 :random_seed 123)]
+       {:trace  trace
+        :model model}))))
 
-(-> (:trace inference-cg2)
-    (py/get-item "mu")
-    ;; (py/get-item 2)
-    tech.v2.tensor/->tensor
-    )
+(with-show (az/plot_trace (:trace inference-h)))
+
+(az/summary (:trace inference-h))
+
+(defn run-inference-h
+  [n-samples g-samples]
+  (let [group-idx (build-group-idx-h n-samples)
+       data (sim-data-h n-samples g-samples)]
+    (py/with
+     [model (pm/Model)]
+     (let [mu    (pm/Beta "mu" 1.0 1.0)
+           kappa (pm/HalfNormal "kappa" 10)
+           theta (pm/Beta "theta"
+                          :alpha (operator/mul mu kappa)
+                          :beta (operator/mul kappa (operator/sub 1.0 mu))
+                          :shape (count (set group-idx)))
+           y     (pm/Bernoulli "y"
+                               :p (py/get-item theta group-idx)
+                               :observed data)
+           (pm/p)
+           trace (pm/sample 2000 :random_seed 123)]
+       {:trace  trace
+        :model model}))))
+
+(def inference-h
+  (run-inference-h n-samples g-samples))
+
+(let [g-samples [18 3 3]
+      {:keys [trace]} (run-inference-h n-samples g-samples)]
+  (with-show (az/plot_trace trace))
+  (az/summary trace))
+
+(with-show (az/plot_joint (:trace inference-h) ))
+
+(with-show (az/plot_ppc (az/from)(:trace inference-h)
+                        :var_names ["theta"]
+                        ))
+
+(let [y-ppc-t (pm/sample_posterior_predictive (:trace inference-h)
+                                              100
+                                              (:model inference-h)
+                                              :random_seed 123)
+      y-pred-t (az/from_pymc3 :trace (:trace inference-h)
+                              :posterior_predictive y-ppc-t)]
+  (with-show (az/plot_ppc y-pred-t)))
+
+;; TODO don't know how to make this "theta" prior yet.
+;; can I use the theta vars for this?
+;; or should I create new Deterministic var based on kappa and mu?
