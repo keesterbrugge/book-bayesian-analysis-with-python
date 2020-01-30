@@ -11,7 +11,7 @@
                 '[pymc3 :as pm :bind-ns]
                 '[numpy :as np]
                 '[arviz :as az]
-                '[scipy.stats :as stats :refer [bernoulli]]
+                '[scipy.stats :as stats :refer [bernoulli beta]]
                 'operator)
 
 
@@ -300,7 +300,6 @@
            y     (pm/Bernoulli "y"
                                :p (py/get-item theta group-idx)
                                :observed data)
-           (pm/p)
            trace (pm/sample 2000 :random_seed 123)]
        {:trace  trace
         :model model}))))
@@ -319,14 +318,120 @@
                         :var_names ["theta"]
                         ))
 
-(let [y-ppc-t (pm/sample_posterior_predictive (:trace inference-h)
+(def y-ppc-t (pm/sample_posterior_predictive (:trace inference-h)
                                               100
                                               (:model inference-h)
-                                              :random_seed 123)
-      y-pred-t (az/from_pymc3 :trace (:trace inference-h)
-                              :posterior_predictive y-ppc-t)]
-  (with-show (az/plot_ppc y-pred-t)))
+                                              :random_seed 123))
+(def y-pred-t (az/from_pymc3 :trace (:trace inference-h)
+                             :posterior_predictive y-ppc-t))
+#_((with-show
+     (az/plot_ppc y-pred-t :var_names ["kappa"])))
+
+(py/get-item (:trace inference-h) "theta")
+
+(with-show (az/plot_ppc (:trace inference-h) :var_names ["kappa"]))
 
 ;; TODO don't know how to make this "theta" prior yet.
 ;; can I use the theta vars for this?
 ;; or should I create new Deterministic var based on kappa and mu?
+
+
+(defn run-inference-h2
+  [n-samples g-samples]
+  (let [group-idx (build-group-idx-h n-samples)
+        data (sim-data-h n-samples g-samples)]
+    (py/with
+     [model (pm/Model)]
+     (let [mu    (pm/Beta "mu" 1.0 1.0)
+           kappa (pm/HalfNormal "kappa" 10)
+           theta (pm/Beta "theta"
+                          :alpha (operator/mul mu kappa)
+                          :beta (operator/mul kappa (operator/sub 1.0 mu))
+                          :shape (count (set group-idx)))
+           y     (pm/Bernoulli "y"
+                               :p (py/get-item theta group-idx)
+                               :observed data)
+           prior_theta
+           (pm/Beta "prior_theta"
+                    :alpha (operator/mul mu kappa)
+                    :beta (operator/mul kappa (operator/sub 1.0 mu)))
+           trace (pm/sample 2000 :random_seed 123)]
+       {:trace  trace
+        :model model}))))
+
+(def inference-h2 (run-inference-h2 n-samples g-samples))
+
+(def y-ppc-t-h2 (pm/sample_posterior_predictive (:trace inference-h2)
+                                             50
+                                             (:model inference-h2)
+                                             :random_seed 123
+                                             :var_names ["mu" "kappa" "prior_theta" ]
+                                            ))
+
+
+(def y-pred-t-h2 (az/from_pymc3 :trace (:trace inference-h2)
+                             :posterior_predictive y-ppc-t-h2))
+
+(py/get-item y-pred-t-h2 "posterior_predictive")
+
+
+(with-show (az/plot_ppc y-pred-t-h2 :var_names ["kappa"]
+                        ))
+
+
+(map (fn [mu kappa] (py. (stats/beta (* mu kappa)
+                                     (* kappa (- 1 mu)))
+                         pdf (np/linspace 0 1 100)))
+     (y-ppc-t-h2 "mu") (y-ppc-t-h2 "kappa"))
+
+
+(def prior-theta-lines (mapcat (fn [mu kappa]
+                             (for [x (np/linspace 0 1 40)]
+                               {:group (str "kappa: " kappa ", mu " mu)
+                                        ;:kappa kappa
+                                        ;:mu mu
+                                :x x
+                                :pdf (py. (stats/beta (* mu kappa)
+                                                      (* kappa (- 1 mu)))
+                                          pdf x)}))
+                           (y-ppc-t-h2 "mu") (y-ppc-t-h2 "kappa")))
+
+(take 5 prior-theta-lines)
+
+(oz/view!
+ {:data {:values prior-theta-lines}
+  :mark :line
+  :encoding {:x {:field :x :type :quantitative}
+             :y {:field :pdf :type :quantitative}
+             :detail {:field :group :type :nominal}
+             :opacity {:value 0.5}
+             :size {:value 0.6}}})
+
+(def prior-theta-lines2
+  (mapcat (fn [mu kappa]
+            (for [x (np/linspace 0 1 40)]
+              {:group (str "kappa: " kappa ", mu " mu)
+                                        ;:kappa kappa
+                                        ;:mu mu
+               :x x
+               :pdf (py. (stats/beta (* mu kappa)
+                                     (* kappa (- 1 mu)))
+                         pdf x)}))
+          (take 40 (py/get-item (:trace inference-h2) "mu"))
+          (take 40 (py/get-item (:trace inference-h2) "kappa"))))
+
+(py/get-item (:trace inference-h2) "mu") 
+
+(take 5 prior-theta-lines2)
+(count prior-theta-lines2)
+
+(oz/view!
+ {:data {:values prior-theta-lines2}
+  :mark :line
+  :encoding {:x {:field :x :type :quantitative}
+             :y {:field :pdf :type :quantitative}
+             :detail {:field :group :type :nominal}
+             :opacity {:value 0.5}
+             :size {:value 0.6}}})
+
+
