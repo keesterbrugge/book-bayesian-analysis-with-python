@@ -7,7 +7,7 @@
             [tech.ml.dataset.pipeline :as ds-pipe]
                      ))
 
-(require-python '[builtins :as pyb]
+(require-python '[builtins :as python]
                 '[pymc3 :as pm :bind-ns]
                 '[numpy :as np]
                 '[arviz :as az]
@@ -15,7 +15,7 @@
                 'operator)
 
 
-(pyb/help pm)
+(python/help pm)
 (assert (= 11 (np/dot [1 2 ] [ 3 4])))
 (py.- pm "__version__")
 (py. bernoulli rvs :p 0.4 :size 5)
@@ -29,8 +29,8 @@
 
 
 
+;; (require-python '([scipy.stats :as stats :refer [bernoulli]]))
 
-(require-python '([scipy.stats :as stats :refer [bernoulli]]))
 (py. np/random seed 123)
 (def trials 4)
 (def theta-real 0.35)
@@ -434,4 +434,125 @@
              :opacity {:value 0.5}
              :size {:value 0.6}}})
 
+(with-show (az/plot_pair (:trace inference-h2) :kind :kde :var_names ["mu" "kappa"]))
 
+
+
+
+;; one more example
+
+(def chem-shifts-theo-exp
+  (ds/->dataset "./resources/data/chemical_shifts_theo_exp.csv"))
+
+
+(def chem-shifts-theo-exp
+  (-> (ds/->dataset "./resources/data/chemical_shifts_theo_exp.csv")
+      (ds-pipe/string->number "aa")
+      (ds-pipe/->datatype "aa" :int32)))
+
+(require '[tech.v2.datatype.functional :as dfn])
+(def diff (dfn/- (chem-shifts-theo-exp "theo") (chem-shifts-theo-exp "exp")))
+
+
+
+(def aa->indices
+  (->> chem-shifts-theo-exp
+       ds/->flyweight
+       (map #(get % "aa"))
+       set
+       (into {} (map-indexed (fn [i e] [e i])) )
+       ))
+
+(defn add-diff [df]
+  (map (fn [{:strs [theo exp] :as m}]
+         (assoc m :diff (- theo exp))) df))
+
+(defn pipeline-nh [df ]
+  (->> df
+       ds/->flyweight
+       add-diff
+       (map #(update % "aa" aa->indices))
+       ))
+
+(pipeline-nh chem-shifts-theo-exp)
+
+
+;; TODO see if this is easier to do with meander. I don't think
+;; dataset is a good solution yet. Doesn't feel like finished thing.
+
+(def groups-nh (count aa->indices))
+
+(def idx-nh
+  (->> (pipeline-nh chem-shifts-theo-exp)
+       (mapv #(get % "aa"))))
+
+(def data-nh
+  (->> (pipeline-nh chem-shifts-theo-exp)
+       (mapv :diff)))
+
+
+
+(def run-inference-nh
+    (py/with
+     [model (pm/Model)]
+     (let [mu    (pm/Normal "mu" :mu 0 :sd 10 :shape groups-nh)
+           sigma (pm/HalfNormal "sigma" :sd 10 :shape groups-nh)
+           y     (pm/Normal "y"
+                            :mu (py/get-item mu idx-nh)
+                            :sd (py/get-item sigma idx-nh)
+                            :observed data-nh)
+           trace (pm/sample 2000 :random_seed 123)]
+       {:trace  trace
+        :model model})))
+
+
+
+(def run-inference-h
+  (py/with
+   [model (pm/Model)]
+   (let [
+         mu-mu (pm/Normal "mu-mu" :mu 0 :sd 10)
+         sigma-mu (pm/HalfNormal "sigma-mu" :sd 10)
+
+         mu    (pm/Normal "mu" :mu mu-mu :sd sigma-mu :shape groups-nh)
+         sigma (pm/HalfNormal "sigma" :sd 10 :shape groups-nh)
+         y     (pm/Normal "y"
+                          :mu (py/get-item mu idx-nh)
+                          :sd (py/get-item sigma idx-nh)
+                          :observed data-nh)
+         trace (pm/sample 2000 :random_seed 123)]
+     {:trace  trace
+      :model model})))
+
+;; TODO find some way to build a macro/function that takes the name of a symbol and adds
+;; it as the first parameter instead of me having to type the symbol AND the string.
+
+
+(with-show
+  (az/plot_forest (mapv :trace [run-inference-h run-inference-nh])
+                  :var_names "mu"
+                  :combined false
+                  :colors "cycle"))
+
+
+(def run-inference-h-swapped-order ; gives error
+  (py/with
+   [model (pm/Model)]
+   (let [
+         mu    (pm/Normal "mu" :mu mu-mu :sd sigma-mu :shape groups-nh)
+
+         mu-mu (pm/Normal "mu-mu" :mu 0 :sd 10)
+         sigma-mu (pm/HalfNormal "sigma-mu" :sd 10)
+
+         sigma (pm/HalfNormal "sigma" :sd 10 :shape groups-nh)
+         y     (pm/Normal "y"
+                          :mu (py/get-item mu idx-nh)
+                          :sd (py/get-item sigma idx-nh)
+                          :observed data-nh)
+         trace (pm/sample 2000 :random_seed 123)]
+     {:trace  trace
+      :model model})))
+
+;; TODO create something in which I give the model, where the order doesn't matter.
+;; so some map like data structure. either some map with maybe some plumbing liek features, or maybe some hiccup syntax or even some datalog syntax
+ 
