@@ -4,7 +4,8 @@
   :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   :dependencies [[org.clojure/clojure "1.10.0"]
-                 [cnuernber/libpython-clj "1.33"]
-                 [metasoarous/oz "1.6.0-alpha5"]
-                 [techascent/tech.ml.dataset "1.68"]]
+                 [cnuernber/libpython-clj "1.36"]
+                 [metasoarous/oz "1.6.0-alpha6"]
+                 [techascent/tech.ml.dataset "1.72"]
+                 [meander/epsilon "0.0.402"]]
   :repl-options {:init-ns book-bayesian-analysis-with-python.core})

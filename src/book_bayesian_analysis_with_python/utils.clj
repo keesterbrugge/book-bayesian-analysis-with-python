@@ -40,3 +40,18 @@
 
 
   )
+
+#_(defmacro quick-trace2 ;; TODO for some reason importing from here doesn't work. 
+  [& body]
+  
+  (let [
+        bindings (partition 2 body)   
+        bindings' (mapcat (fn [[symb ls]]
+                            [symb (concat (list(first ls) (name symb)) (rest ls))]) bindings)]
+    (println bindings')
+    `(py/with
+      [_# (pm/Model)]
+      (let [~@bindings']
+        (pm/sample 1000)))))
+
+

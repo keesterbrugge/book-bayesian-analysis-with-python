@@ -1,8 +1,9 @@
 (ns book-bayesian-analysis-with-python.2
   (:require [libpython-clj.require :refer [require-python]]
             [libpython-clj.python :as py :refer [py. py.- py..]]
-            [book-bayesian-analysis-with-python.utils :refer [with-show]]
+            [book-bayesian-analysis-with-python.utils :refer [with-show ]]
             [oz.core :as oz]
+            oz.server
             [tech.ml.dataset :as ds]
             [tech.ml.dataset.pipeline :as ds-pipe]
                      ))
@@ -17,6 +18,7 @@
 
 (python/help pm)
 (assert (= 11 (np/dot [1 2 ] [ 3 4])))
+np/nan
 (py.- pm "__version__")
 (py. bernoulli rvs :p 0.4 :size 5)
 
@@ -554,5 +556,189 @@
       :model model})))
 
 ;; TODO create something in which I give the model, where the order doesn't matter.
-;; so some map like data structure. either some map with maybe some plumbing liek features, or maybe some hiccup syntax or even some datalog syntax
+;; so some map like data structure. either some map with maybe some plumbing liek features, or maybe some hiccup syntax or even some datalog syntax. If you'd have a datastructure you could just add components to the model programmatically. If it is non-ordered you don\t have to think about order, let the program figure it out. Error if not possible. Should probably be a dag. 
  
+ 
+;; exercises
+
+(def data (py. bernoulli rvs :p 0.35 :size 4))
+(def res (py/with [model (pm/Model)]
+                (pm/Bernoulli "y"
+                              :p (pm/Beta "theta" :alpha 1 :beta 1)
+                              ;; :p (pm/Uniform "theta" :lower -2 :upper 1)
+                              :observed data)
+                (hash-map :trace (pm/sample 1000 :random_seed 123)
+                          :model model)))
+;; beta 1 1 and uniform same speed
+;; uniform -2 1 gives error. Logical since p of bernoulli must lie in [0, 1]
+
+
+;;2:  coal mining disaster
+;; https://docs.pymc.io/notebooks/getting_started.html#Case-study-2:-Coal-mining-disasters
+(def disaster_data [4, 5, 4, 0, 1, 4, 3, 4, 0, 6, 3, 3, 4, 0, 2, 6,
+                    3, 3, 5, 4, 5, 3, 1, 4, 4, 1, 5, 5, 3, 4, 2, 5,
+                    2, 2, 3, 4, 2, 1, 3, nil, 2, 1, 1, 1, 1, 3, 0, 0,
+                    1, 0, 1, 1, 0, 0, 3, 1, 0, 3, 2, 2, 0, 1, 1, 1,
+                    0, 1, 0, 1, 0, 0, 0, 2, 1, 0, 0, 0, 1, 1, 0, 2,
+                    3, 3, 1, nil, 2, 1, 1, 1, 1, 2, 4, 2, 0, 0, 1, 4,
+                    0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1])
+
+(def disaster-data-nonil (filterv identity disaster_data))
+
+(def years (np/arange 1851, 1962))
+
+(with-show
+  (matplotlib.pyplot/plot years disaster_data "o" :markersize 8))
+
+
+(defn point-spec [x-ary y-ary]
+  {:data {:values (map #(zipmap [:x :y] %&) x-ary y-ary)}
+   :mark :point 
+   ;; :mark {:type :point :tooltip true}
+   :encoding {:x {:field :x :type :quantitative :scale {:zero false}}
+              :y {:field :y :type :quantitative}}})
+(defn point-spec-tooltip [x-ary y-ary]
+  {:data {:values (map #(zipmap [:x :y] %&) x-ary y-ary)}
+   ;; :mark :point 
+   :mark {:type :point :tooltip true}
+   :encoding {:x {:field :x :type :quantitative :scale {:zero false}}
+              :y {:field :y :type :quantitative}}})
+
+(oz/start-server!)
+(oz/view!
+ (point-spec years disaster_data))
+(oz.server/stop-web-server!)
+
+;; 1: just use 1 rate
+;; 2: use 2 rates fixed switchpoint
+;; 3: use 2 rates floating switchpoint
+;; 4: include nan values instead of flitering out. 
+(def coal-mining-inference 
+  (py/with
+   [model (pm/Model)]
+   (let [
+         ;;switchpoint (pm/DiscreteUniform "t" :lower 1851 :upper 1962)
+         ;; r-early (pm/HalfNormal "r-early" :sigma 10)
+         r-early (pm/Exponential "r-early" :lam 1)
+         ;;r-late (pm/HalfNormal "r-late"  :sigma 10)
+         ;; rate  (py.. pm math switch (>= switchpoint years) r-early r-late)
+         ;; switch (py.. pm math switch )
+
+         disasters (pm/Poisson "disasters" :mu r-early
+                               :observed
+                               (->> disaster_data (filterv identity))
+                               #_disaster_data
+                               #_(mapv (fn [e] (if e e np/nan)) disaster_data)
+                               )
+
+         trace (pm/sample 1000)
+         ]
+         {:trace  trace
+          :model model})))
+
+(with-show (az/plot_trace (:trace coal-mining-inference)))
+(with-show (az/plot_forest (:trace inference-cg)))
+
+(-> coal-mining-inference
+    :trace
+    (py/get-item "r-early"))
+
+((:trace coal-mining-inference) "r-early")
+
+
+(py/att-type-map (:trace coal-mining-inference))
+
+
+(def coal-mining-inference2
+  (py/with
+   [model (pm/Model)]
+   (let [
+         ;;switchpoint (pm/DiscreteUniform "t" :lower 1851 :upper 1962)
+         ;; r-early (pm/HalfNormal "r-early" :sigma 10)
+         r-early (pm/Exponential "r-early" :lam 1)
+         ;;r-late (pm/HalfNormal "r-late"  :sigma 10)
+         ;; rate  (py.. pm math switch (>= switchpoint years) r-early r-late)
+         ;; switch (py.. pm math switch )
+
+         disasters (pm/Poisson "disasters" :mu r-early :observed (->> disaster_data
+                                                                      (filterv identity)))
+
+         trace (pm/sample 1000)
+         ]
+     {:trace  trace
+      :model model})))
+
+(trace
+ r-early (pm/Exponential :lam 1)
+ disasters (pm/Poisson :mu r-early :observed disaster_data))
+
+(defmacro quick-trace
+  [& body]
+   
+  (let [
+        bindings (partition 2 body)
+         bindings' (mapcat (fn [[symb ls]]
+                             [symb (concat (list(first ls) (name symb)) (rest ls))]) bindings)]
+     (println bindings')
+     `(py/with
+       [_# (pm/Model)]
+       (let [~@bindings']
+         (pm/sample 1000)))))
+
+(macroexpand-1 '(quick-trace
+                 r-early (pm/Exponential :lam 1)
+                 disasters (pm/Poisson :mu r-early :observed disaster-data-nonil)))
+;; => (libpython-clj.python/with [___68826__auto__ (pymc3/Model)] (clojure.core/let [r-early (pm/Exponential "r-early" :lam 1) disasters (pm/Poisson "disasters" :mu r-early :observed disaster-data-nonil)] (pymc3/sample 1000)))
+
+
+
+(def trace-coal-1
+  (quick-trace
+   r-early (pm/Exponential :lam 1)
+   disasters (pm/Poisson :mu r-early :observed disaster-data-nonil)))
+
+(with-show (az/plot_trace  trace-coal-1))
+
+
+(quick-trace
+ r-early (pm/Exponential :lam 1)
+ disasters (pm/Poisson :mu r-early :observed disaster-data-nonil))
+
+
+
+(defn oz-export-png
+  [spec filename]
+                                        ; this allows us to call a private function
+  (#'oz/vg-cli
+   {:spec spec
+    :format :png
+    :return-output? false
+    :output-filename filename}))
+
+(comment
+  (oz-export-png (point-spec years disaster_data) "oz-tmp.png")
+  )
+
+(require '[clojure.java.shell :as sh])
+(defn oz-quick-view! [spec]
+     (oz-export-png spec "oz-tmp.png")
+     (sh/sh "open" "oz-tmp.png"))
+
+(oz-quick-view! (point-spec years disaster_data))
+(oz-quick-view! (point-spec (map (partial + 100) years) disaster_data))
+
+(defn oz-quick-svg! [spec]
+  (#'oz/vg-cli
+   {:spec spec
+    :format :svg
+    :return-output? false
+    :output-filename "oz-tmp.svg"})
+  #_(sh/sh "open" "oz-tmp.svg")
+  ;; the spacebar quick look application in finder
+  (sh/sh "qlmanage" "-p" "oz-tmp.svg"))
+
+(oz-quick-svg! (point-spec years disaster_data))
+#_(oz-quick-svg! (point-spec-tooltip years disaster_data))
+;; cause tooltip doesn't work with svg or png anyway. 
+
+
