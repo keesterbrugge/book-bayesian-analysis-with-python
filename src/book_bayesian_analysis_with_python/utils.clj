@@ -1,6 +1,7 @@
 (ns book-bayesian-analysis-with-python.utils
   (:require [libpython-clj.require :refer [require-python]]
-            [libpython-clj.python :as py :refer [py.]]))
+            [libpython-clj.python :as py :refer [py.]]
+            [tech.ml.dataset :as ds]))
 
 ;; try out plot functionality from gigasquid blo
 ;; https://gigasquidsoftware.com/blog/2020/01/18/parens-for-pyplot/
@@ -55,3 +56,21 @@
         (pm/sample 1000)))))
 
 
+(defn group-by-columns-and-aggregate [gr-colls agg-fns-map ds]
+  (->> (ds/group-by identity ds gr-colls)
+       (map (fn [[group-idx group-ds]]
+              (into group-idx (map (fn [[k agg-fn]] [k (agg-fn group-ds)]) agg-fns-map))))
+       ds/->dataset))
+
+
+(defn plot-posterior-predictive-check [{:keys [trace model]} {:keys [xlim]}]
+  (let [prior (pm/sample_prior_predictive :model model)
+        posterior-pred (pm/sample_posterior_predictive :trace trace
+                                                       :model model :samples 100)
+        az-inf-obj (az/from_pymc3 :trace trace
+                                           :prior prior
+                                           :posterior_predictive posterior-pred)]
+    (with-show
+      (az/plot_ppc az-inf-obj)
+      (when xlim
+        (apply matplotlib.pyplot/xlim xlim)))))
